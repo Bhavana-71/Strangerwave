@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>StrangerWave</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            max-width: 780px;
+            margin: 30px auto;
+            background: #f4f6f8;
+            color: #222;
+        }
+        h2 { font-size: 28px; margin-bottom: 4px; color: #1a1a2e; }
+        .subtitle { color: #777; margin-bottom: 20px; font-size: 14px; }
+
+        /* ---- Mode selection screen ---- */
+        #modeSelect {
+            text-align: center;
+            padding: 60px 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+        }
+        #modeSelect h3 { font-size: 20px; margin-bottom: 24px; }
+        .mode-btn {
+            display: inline-block;
+            width: 200px;
+            padding: 20px;
+            margin: 0 10px;
+            border: 2px solid #4361ee;
+            border-radius: 10px;
+            background: white;
+            color: #4361ee;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .mode-btn:hover { background: #4361ee; color: white; }
+
+        #appScreen { display: none; }
+
+        .status-bar {
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 14px;
+            margin-bottom: 14px;
+            display: inline-block;
+        }
+        .status-waiting { background: #fff3cd; color: #856404; }
+        .status-connected { background: #d4edda; color: #155724; }
+        .status-disconnected { background: #f8d7da; color: #721c24; }
+
+        #videos { display: flex; gap: 12px; margin-bottom: 12px; }
+        .video-wrapper { position: relative; flex: 1; }
+        .video-label {
+            position: absolute; top: 8px; left: 8px;
+            background: rgba(0,0,0,0.6); color: white;
+            font-size: 12px; padding: 2px 8px; border-radius: 4px;
+        }
+        video {
+            width: 100%; height: 240px; background: #1a1a2e;
+            border-radius: 10px; object-fit: cover;
+        }
+        .controls { margin-bottom: 16px; }
+        button {
+            padding: 10px 16px; margin-right: 8px; border: none;
+            border-radius: 6px; cursor: pointer; font-size: 14px;
+            font-weight: 500; transition: opacity 0.2s;
+        }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: #4361ee; color: white; }
+        .btn-danger { background: #e63946; color: white; }
+        .btn-secondary { background: #edf2f4; color: #333; }
+        .btn-next { background: #2a9d8f; color: white; }
+
+        #chatBox {
+            border: 1px solid #ddd; background: white; height: 240px;
+            overflow-y: auto; padding: 12px; margin-bottom: 12px; border-radius: 8px;
+        }
+        #chatBox p { margin: 6px 0; }
+        .system { color: #888; font-style: italic; font-size: 13px; }
+        .you { color: #1d3557; font-weight: 500; }
+        .stranger { color: #2a9d8f; font-weight: 500; }
+
+        .input-row { display: flex; gap: 8px; }
+        #messageInput { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+    </style>
+</head>
+<body>
+<h2>StrangerWave</h2>
+<div class="subtitle">Chat and video call with random strangers, instantly.</div>
+
+<!-- MODE SELECTION SCREEN -->
+<div id="modeSelect">
+    <h3>How do you want to connect?</h3>
+    <button class="mode-btn" onclick="chooseMode('text')">💬 Text Chat Only</button>
+    <button class="mode-btn" onclick="chooseMode('video')">📹 Video Call</button>
+</div>
+
+<!-- MAIN APP SCREEN (hidden until mode is chosen) -->
+<div id="appScreen">
+    <div id="statusBar" class="status-bar status-waiting">Connecting...</div>
+
+    <div id="videos" style="display:none;">
+        <div class="video-wrapper">
+            <span class="video-label">You</span>
+            <video id="localVideo" autoplay muted playsinline></video>
+        </div>
+        <div class="video-wrapper">
+            <span class="video-label">Stranger</span>
+            <video id="remoteVideo" autoplay playsinline></video>
+        </div>
+    </div>
+
+    <div class="controls" id="videoControls" style="display:none;">
+        <button id="startVideoBtn" class="btn-primary" onclick="startVideo()">Start Video</button>
+        <button id="stopVideoBtn" class="btn-danger" onclick="stopVideo()" disabled>Stop Video</button>
+    </div>
+
+    <div id="chatBox"></div>
+
+    <div class="input-row">
+        <input type="text" id="messageInput" placeholder="Type a message...">
+        <button class="btn-secondary" onclick="sendMessage()">Send</button>
+        <button class="btn-next" onclick="nextStranger()">Next Stranger</button>
+    </div>
+</div>
+
+<script>
+    let socket;
+    let localStream;
+    let peerConnection;
+    let inCall = false;
+    let myMode = 'text'; // "text" or "video"
+    const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+    function chooseMode(mode) {
+        myMode = mode;
+        document.getElementById('modeSelect').style.display = 'none';
+        document.getElementById('appScreen').style.display = 'block';
+
+        if (mode === 'video') {
+            document.getElementById('videos').style.display = 'flex';
+            document.getElementById('videoControls').style.display = 'block';
+        }
+
+        connect();
+    }
+
+    function setStatus(text, type) {
+        const bar = document.getElementById('statusBar');
+        bar.textContent = text;
+        bar.className = 'status-bar status-' + type;
+    }
+
+    function connect() {
+        socket = new WebSocket('ws://localhost:8080/chat');
+
+        socket.onopen = function() {
+            setStatus('Connected to server. Looking for a stranger...', 'waiting');
+            socket.send(JSON.stringify({ type: 'join', mode: myMode }));
+        };
+
+        socket.onmessage = async function(event) {
+            const msg = JSON.parse(event.data);
+
+            if (msg.type === 'system') {
+                log(msg.text, 'system');
+                if (msg.text.includes('Waiting')) setStatus('Waiting for a stranger...', 'waiting');
+                if (msg.text.includes('connected')) setStatus('Stranger connected!', 'connected');
+                if (msg.text.includes('disconnected') || msg.text.includes('left')) {
+                    setStatus('Stranger left. Click Next to find someone new.', 'disconnected');
+                }
+            } else if (msg.type === 'chat') {
+                log('Stranger: ' + msg.text, 'stranger');
+            } else if (msg.type === 'signal') {
+                await handleSignal(msg.payload);
+            } else if (msg.type === 'endcall') {
+                endCallCleanup();
+            }
+        };
+
+        socket.onclose = function() {
+            setStatus('Disconnected from server.', 'disconnected');
+            log('Disconnected from server.', 'system');
+        };
+    }
+
+    function sendMessage() {
+        const input = document.getElementById('messageInput');
+        const text = input.value;
+        if (text.trim() === '') return;
+        socket.send(JSON.stringify({ type: 'chat', text: text }));
+        log('You: ' + text, 'you');
+        input.value = '';
+    }
+
+    function nextStranger() {
+        log('Looking for a new stranger...', 'system');
+        setStatus('Looking for a new stranger...', 'waiting');
+        endCallCleanup();
+        socket.send(JSON.stringify({ type: 'next' }));
+    }
+
+    function log(text, cssClass) {
+        const chatBox = document.getElementById('chatBox');
+        const p = document.createElement('p');
+        p.textContent = text;
+        if (cssClass) p.className = cssClass;
+        chatBox.appendChild(p);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    document.getElementById('messageInput').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') sendMessage();
+    });
+
+    // ---------- WebRTC video calling ----------
+
+    async function startVideo() {
+        try {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        } catch (err) {
+            log('Camera/microphone access denied or unavailable.', 'system');
+            return;
+        }
+        document.getElementById('localVideo').srcObject = localStream;
+
+        createPeerConnection();
+        localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.send(JSON.stringify({ type: 'signal', payload: { kind: 'offer', sdp: offer } }));
+
+        inCall = true;
+        updateVideoButtons();
+        log('Starting video call...', 'system');
+    }
+
+    function createPeerConnection() {
+        peerConnection = new RTCPeerConnection(configuration);
+
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+                socket.send(JSON.stringify({ type: 'signal', payload: { kind: 'candidate', candidate: event.candidate } }));
+            }
+        };
+
+        peerConnection.ontrack = (event) => {
+            document.getElementById('remoteVideo').srcObject = event.streams[0];
+        };
+
+        peerConnection.onconnectionstatechange = () => {
+            if (peerConnection && (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed')) {
+                endCallCleanup();
+            }
+        };
+    }
+
+    async function handleSignal(payload) {
+        if (payload.kind === 'offer') {
+            if (!localStream) {
+                try {
+                    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                } catch (err) {
+                    log('Camera/microphone access denied or unavailable.', 'system');
+                    return;
+                }
+                document.getElementById('localVideo').srcObject = localStream;
+            }
+            if (!peerConnection) createPeerConnection();
+            localStream.getTracks().forEach(track => {
+                if (!peerConnection.getSenders().find(s => s.track === track)) {
+                    peerConnection.addTrack(track, localStream);
+                }
+            });
+
+            await peerConnection.setRemoteDescription(payload.sdp);
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.send(JSON.stringify({ type: 'signal', payload: { kind: 'answer', sdp: answer } }));
+
+            inCall = true;
+            updateVideoButtons();
+            log('Incoming video call connected.', 'system');
+
+        } else if (payload.kind === 'answer') {
+            await peerConnection.setRemoteDescription(payload.sdp);
+
+        } else if (payload.kind === 'candidate') {
+            try {
+                await peerConnection.addIceCandidate(payload.candidate);
+            } catch (e) {
+                console.error('Error adding ICE candidate', e);
+            }
+        } else if (payload.kind === 'hangup') {
+            endCallCleanup();
+        }
+    }
+
+    function stopVideo() {
+        socket.send(JSON.stringify({ type: 'signal', payload: { kind: 'hangup' } }));
+        endCallCleanup();
+    }
+
+    function endCallCleanup() {
+        if (peerConnection) {
+            peerConnection.close();
+            peerConnection = null;
+        }
+        if (localStream) {
+            localStream.getTracks().forEach(t => t.stop());
+            localStream = null;
+        }
+        document.getElementById('localVideo').srcObject = null;
+        document.getElementById('remoteVideo').srcObject = null;
+        inCall = false;
+        updateVideoButtons();
+    }
+
+    function updateVideoButtons() {
+        document.getElementById('startVideoBtn').disabled = inCall;
+        document.getElementById('stopVideoBtn').disabled = !inCall;
+    }
+
+    // NOTE: connect() is now called only after chooseMode() runs — not on page load
+</script>
+</body>
+</html>
