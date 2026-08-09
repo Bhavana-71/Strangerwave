@@ -157,7 +157,8 @@
     }
 
     function connect() {
-        socket = new WebSocket('ws://localhost:8080/chat');
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        socket = new WebSocket(protocol + '//' + window.location.host + '/chat');
 
         socket.onopen = function() {
             setStatus('Connected to server. Looking for a stranger...', 'waiting');
