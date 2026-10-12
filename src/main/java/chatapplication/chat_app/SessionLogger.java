@@ -8,9 +8,10 @@ import java.sql.Timestamp;
 
 public class SessionLogger {
 
-    private static final String URL = "jdbc:mysql://localhost:3306/strangerwave";
-    private static final String USER = "root";
-    private static final String PASSWORD = "root";
+    // Reads from environment variables when deployed; falls back to local MySQL when running on your laptop
+    private static final String URL = System.getenv().getOrDefault("DB_URL", "jdbc:mysql://localhost:3306/strangerwave");
+    private static final String USER = System.getenv().getOrDefault("DB_USER", "root");
+    private static final String PASSWORD = System.getenv().getOrDefault("DB_PASSWORD", "root");
 
     // Called when a user connects — logs the start time
     public static void logSessionStart(String sessionId) {
